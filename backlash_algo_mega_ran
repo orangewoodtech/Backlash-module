@@ -1,0 +1,240 @@
+#include <SPI.h>  // SPI library for reading SD card using its module
+#include <SD.h>   // SD library for SD card operations using its module.
+
+unsigned int testCase = 3;
+unsigned int no_testCase = 0;
+
+const int chipSelect = 53;
+
+unsigned long five_time_start = 0;
+unsigned long five_time_end = 0; 
+
+int encoderPin1 = 21;  
+int encoderPin2 = 20;
+
+int encoderPin3 = 3;
+int encoderPin4 = 2;
+
+float gearRatio = 41/38;
+
+#define PUL 7  
+#define DIR 8
+
+File encoder_test;
+
+String fileName1 = "enc_mran.csv";
+
+volatile int lastEncodedOut = 0;   // to store the last encoded value of the encoder
+volatile int lastEncodedInp = 0;  //
+volatile long encoderValueOut = 0; // to store the final encoded value of the encoder
+volatile long encoderValueInp = 0; //
+
+unsigned int count = 0;         // variable to count number of pulses sent to the drive
+double delayPul = 0;            // length of pulses for the drives
+float pul = 0;                  // No. of pulses to be sent to drives
+float deg = 0;                  // No. of rotation that stepper move after giving input in degrees.
+
+int inDirDeg = 0;             // Input degrees to move stepper.
+int inTime = 0;               // Input time to complete stepper movement in certain time.
+String direct;    
+int serialData;              // Variable to store serial data input.
+
+void updateEncoderOut(){
+  int MSB = digitalRead(encoderPin3); //MSB = most significant bit
+  int LSB = digitalRead(encoderPin4); //LSB = least significant bit
+ 
+  int encoded = (MSB << 1) |LSB; //converting the 2 pin value to single number
+  int sum  = (lastEncodedOut << 2) | encoded; //adding it to the previous encoded value
+ 
+  if(sum == 0b1101 || sum == 0b0100 || sum == 0b0010 || sum == 0b1011) encoderValueOut ++;
+  if(sum == 0b1110 || sum == 0b0111 || sum == 0b0001 || sum == 0b1000) encoderValueOut --;
+ 
+  lastEncodedOut = encoded; //store this value for next time
+}
+
+void updateEncoderInp(){
+  int MSB = digitalRead(encoderPin1); //MSB = most significant bit
+  int LSB = digitalRead(encoderPin2); //LSB = least significant bit
+ 
+  int encoded = (MSB << 1) |LSB; //converting the 2 pin value to single number
+  int sum  = (lastEncodedInp << 2) | encoded; //adding it to the previous encoded value
+ 
+  if(sum == 0b1101 || sum == 0b0100 || sum == 0b0010 || sum == 0b1011) encoderValueInp ++;
+  if(sum == 0b1110 || sum == 0b0111 || sum == 0b0001 || sum == 0b1000) encoderValueInp --;
+ 
+  lastEncodedInp = encoded; //store this value for next time  
+}
+
+void setup() {
+  // Setting pin modes for the encoder pin1 and pin2, that are interrupt pins and pullup these pins internally.
+  pinMode(encoderPin1, INPUT_PULLUP);
+  pinMode(encoderPin2, INPUT_PULLUP);
+  
+  pinMode(encoderPin3, INPUT_PULLUP);
+  pinMode(encoderPin4, INPUT_PULLUP);
+
+  // Interrupt for encoder pulses that are receiving as an input to the controller.
+  attachInterrupt(digitalPinToInterrupt(encoderPin3), updateEncoderOut, CHANGE); 
+  attachInterrupt(digitalPinToInterrupt(encoderPin4), updateEncoderOut, CHANGE);
+
+  attachInterrupt(digitalPinToInterrupt(encoderPin1), updateEncoderInp, CHANGE); 
+  attachInterrupt(digitalPinToInterrupt(encoderPin2), updateEncoderInp, CHANGE);
+
+  // Setting modes for the pulse pin and direction pin for servo drive.
+  pinMode(PUL, OUTPUT);
+  pinMode(DIR, OUTPUT);
+
+  pinMode(53, OUTPUT);
+
+  Serial.begin(9600);
+  while(!Serial) {
+//    wait for serial to connect.
+  }
+
+  // Initializing and Checking SD card working properly or not
+  Serial.print("Initializing SD card...");
+
+  // see if the card is present and can be initialized:
+
+    if (!SD.begin(chipSelect)) {
+
+      Serial.println("Card failed, or not present");
+
+      // don't do anything more:
+
+      return;
+
+    }
+  Serial.println("initialization done.");
+  Serial.println();
+
+  digitalWrite(8, HIGH);
+
+  /*
+   * Removing all the files at the starting of program to remove all the redundant data.
+   */
+  if (SD.exists(fileName1)) {
+    SD.remove(fileName1);
+  }
+
+  randomSeed(analogRead(0));
+}
+
+void loop() {
+  // put your main code here, to run repeatedly:
+  while (Serial.available()) { 
+    while (testCase > 0) {
+      no_testCase++;
+      Serial.println(no_testCase);
+  
+      count = 0;
+  
+      serialData = random(-2880, 2880);
+  
+      if (serialData > 0) {
+        direct = "Clockwise";  
+        inDirDeg = serialData;        
+        digitalWrite(8, HIGH);        
+      } else if (serialData < 0) {  
+        direct = "Anticlockwise";  
+        inDirDeg = -1 * serialData;        
+        digitalWrite(8, LOW);  
+      } else {
+        inDirDeg = 0;
+      }
+
+      inTime = 3;
+  
+      Serial.print("Direction: ");
+      Serial.println(direct);
+      Serial.print("Time: ");
+      Serial.println(inTime);
+      Serial.print("Output Degrees: ");
+      Serial.println(inDirDeg);
+    
+      deg = ((float(inDirDeg)*41)/38)/360;
+      pul = 1600*deg;
+      delayPul = inTime*1000000/pul;
+
+      Serial.print("Input Degrees: ");
+      Serial.println(deg*360, 3);
+
+      Serial.print("Req Stepper Input Pulses: ");
+      Serial.println(pul, 3); 
+      Serial.print("Req Input Encoder Pulses: ");
+      Serial.println(deg*1440, 3);
+      Serial.print("Req Output Encoder Pulses: ");
+      Serial.println(inDirDeg*4);
+  
+      encoderValueOut = 0;
+      encoderValueInp = 0;
+      
+      five_time_start = millis();
+      
+      while (count < pul) {
+        digitalWrite(7, LOW);
+        delayMicroseconds(delayPul);
+        digitalWrite(7, HIGH);
+        count++;
+        five_time_end = millis();
+        if (five_time_end - five_time_start >= 500) {
+          Serial.println("inside if");
+          float eptospr = 1440/1600;  // encoder pulse to stepper pulse ratio
+          float inDegRot = float(encoderValueInp);
+
+          float diffPul = 0;
+          if(serialData > 0) {
+            diffPul = ((-1 * float(encoderValueInp) * 1600) / 1440) - float(count);
+          } else {
+            diffPul = ((float(encoderValueInp) * 1600) / 1440) - float(count);
+          }
+
+          Serial.print("encoderValueInp: ");
+          Serial.println(encoderValueInp);
+
+          Serial.print("encoderValueOut: ");
+          Serial.println(encoderValueOut);
+
+          Serial.println(float(encoderValueOut)*41/38);
+
+          Serial.print("count: ");
+          Serial.println(count);
+
+          Serial.print("diffpul: ");
+          Serial.println(diffPul, 4);
+
+//          pul = pul - diffPul;
+          Serial.print("pul: ");
+          Serial.println(pul, 4);
+//          pul = pul + degError*1600/360;
+          
+          float tPulGOut = float(encoderValueInp)/gearRatio;
+          float diffPulGOut = tPulGOut - float(encoderValueOut);
+
+//          pul += diffPulGOut*gearRatio*eptospr;          
+//          if(diffPulGOut > 0) {
+//            pul += diffPulGOut*gearRatio*eptospr;
+//          }
+          five_time_start = millis();
+        }
+      }
+      Serial.print("No. of stepper pulses required to give Output degrees: ");
+      Serial.println(count);
+      
+      delay(100);
+      Serial.print("Output Degrees: ");
+      Serial.println(float(float(encoderValueOut)/float(4)), 4);
+      Serial.print("Input Degrees: ");
+      Serial.println(float(float(encoderValueInp)/float(4)), 4);
+      Serial.print("Encoder Output: ");
+      Serial.println(encoderValueOut);      
+      Serial.print("Encoder Input: ");
+      Serial.println(encoderValueInp);
+      Serial.print("Degrees Ratio: ");
+      Serial.println(float(float(encoderValueInp)/float(encoderValueOut)), 4);      
+      Serial.println();
+      delay(10);
+      testCase--;
+    }
+  }
+}
